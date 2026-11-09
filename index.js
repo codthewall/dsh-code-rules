@@ -62,7 +62,7 @@ if (schema === null) {
   }
 }
 
-/** 插件配置：只暴露一个总开关，其余开关在会话/项目层。 */
+/** 插件配置：一个总开关 + 两个注入预算；会话/项目层的开关不在这里。 */
 export const Config =
   schema === null
     ? undefined
@@ -71,6 +71,14 @@ export const Config =
           .boolean()
           .default(true)
           .description('新会话默认注入 CODE-RULES.md；会话内可用 /rules off 临时关闭'),
+        fullLimit: schema
+          .number()
+          .default(6000)
+          .description('全文注入的上限（字符）；超过就降级成摘要'),
+        summaryLimit: schema
+          .number()
+          .default(12000)
+          .description('摘要注入的上限（字符）；超过只注入摘要加完整冻结清单'),
       });
 
 /** 正文没变就不必重新解析：每轮注入都读同一个文件。 */
@@ -120,7 +128,11 @@ function injectionFor(state, context) {
     return '';
   }
   try {
-    return buildInjection(parseCached(text), { enabled: true });
+    return buildInjection(parseCached(text), {
+      enabled: true,
+      fullLimit: state.config.fullLimit,
+      summaryLimit: state.config.summaryLimit,
+    });
   } catch {
     return '';
   }

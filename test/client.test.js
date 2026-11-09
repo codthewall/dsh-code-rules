@@ -12,7 +12,7 @@ const clientPath = join(here, '..', 'lib', 'client.js');
  * 客户端插件是 `window.__ModuleLoader__.load({...})` 包起来的脚本，不能在 Node 里直接
  * import。这里用 vm 造一个最小浏览器环境，把 factory 跑出来。
  */
-async function loadClient({ scope } = {}) {
+async function loadClient() {
   const source = await readFile(clientPath, 'utf8');
   let captured;
   const window = {
@@ -40,12 +40,18 @@ async function loadClient({ scope } = {}) {
   return { spec: captured, module, React };
 }
 
-function makeCtx(served = ['code-rules']) {
+function makeCtx(served = ['code-rules'], snapshotValue = {}) {
   const registered = [];
   const injected = [];
+  const scope = {
+    getSnapshot: () => ({ value: snapshotValue, writable: true }),
+    subscribe: () => () => {},
+    set: async () => true,
+  };
   return {
     registered,
     injected,
+    scope,
     ctx: {
       effect(fn) {
         return fn();
@@ -54,8 +60,8 @@ function makeCtx(served = ['code-rules']) {
         whileServed(namespaces, callback) {
           return callback(new Set(namespaces.filter((ns) => served.includes(ns))));
         },
-        get(ns) {
-          return { ns };
+        get() {
+          return scope;
         },
       },
       slots: {
@@ -72,7 +78,7 @@ function makeCtx(served = ['code-rules']) {
   };
 }
 
-describe('客户端设置卡片', () => {
+describe('设置页整页', () => {
   it('模块声明了入口 id 与最小服务集', async () => {
     const { spec, module } = await loadClient();
     assert.equal(spec.id, 'dsh-code-rules');
@@ -83,36 +89,40 @@ describe('客户端设置卡片', () => {
     assert.equal(module.__internals.CONFIG_NS, 'code-rules');
   });
 
-  it('宿主提供命名空间时，往 plugins.item 挂一张卡片', async () => {
+  it('宿主提供命名空间时，往 settings.section 挂一个导航项', async () => {
     const { module } = await loadClient();
     const { ctx, registered, injected } = makeCtx();
     module.apply(ctx);
 
-    assert.deepEqual(injected, ['plugins.item']);
+    assert.deepEqual([...injected], ['settings.section']);
     assert.equal(registered.length, 1);
     const { definition } = registered[0];
-    assert.equal(definition.name, 'plugins.item');
+    assert.equal(definition.name, 'settings.section');
     assert.equal(definition.id, 'code-rules');
     assert.equal(definition.label(), '代码约束规则');
-    assert.equal(definition.inject().scope.ns, 'code-rules');
+    assert.equal(typeof definition.inject().scope.set, 'function');
   });
 
-  it('宿主没提供命名空间时不挂卡片，也不抛错', async () => {
+  it('宿主没提供命名空间时不挂载，也不抛错', async () => {
     const { module } = await loadClient();
     const { ctx, registered } = makeCtx([]);
     module.apply(ctx);
     assert.equal(registered.length, 0);
   });
 
-  it('卡片给插件列表提供一句摘要', async () => {
+  it('草稿从配置快照来，缺字段时回落到默认值', async () => {
     const { module } = await loadClient();
-    const summary = module.__internals.CodeRulesCard({ view: 'summary' });
-    assert.equal(summary, module.__internals.COPY.summary);
+    const { draftFrom } = module.__internals;
+    assert.deepEqual({ ...draftFrom({}) }, { defaultEnabled: true, fullLimit: 6000, summaryLimit: 12000 });
+    assert.deepEqual(
+      { ...draftFrom({ value: { defaultEnabled: false, fullLimit: 3000, summaryLimit: '9000' } }) },
+      { defaultEnabled: false, fullLimit: 3000, summaryLimit: 9000 },
+    );
   });
 
-  it('拿不到表单快照时渲染一句「暂时不可用」', async () => {
+  it('样式里带页面的类名', async () => {
     const { module } = await loadClient();
-    const element = module.__internals.CodeRulesCard({ scope: undefined });
-    assert.equal(element.children[0], module.__internals.COPY.unavailable);
+    assert.ok(module.__internals.CSS.includes('.dcr-page'));
+    assert.ok(module.__internals.CSS.includes('.dcr-card'));
   });
 });

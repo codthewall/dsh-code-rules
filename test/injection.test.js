@@ -54,3 +54,23 @@ test('冻结清单里的长理由在任何档位都不被截断', () => {
   const text = buildInjection(doc);
   assert.ok(text.includes(longReason), '冻结理由必须整段出现');
 });
+
+test('阈值可配置：调小会降到最小档，调大则整份注入', () => {
+  const doc = makeDoc({ rulesPerSection: 20, frozen: FROZEN });
+  const size = render(doc).length;
+
+  const squeezed = buildInjection(doc, { fullLimit: 1000, summaryLimit: 2000 });
+  assert.match(squeezed, /只注入最小档/);
+
+  const roomy = buildInjection(doc, { fullLimit: size + 10, summaryLimit: size + 20 });
+  assert.match(roomy, /# 代码约束规则/);
+  assert.doesNotMatch(roomy, /已降级|只注入最小档/);
+});
+
+test('阈值非法时回落到默认值，不会把注入搞成空串', () => {
+  const doc = makeDoc({ rulesPerSection: 1 });
+  for (const bad of [0, -5, 'abc', null, undefined, Number.NaN]) {
+    const text = buildInjection(doc, { fullLimit: bad, summaryLimit: bad });
+    assert.match(text, /# 代码约束规则/, `阈值 ${String(bad)} 应当回落到默认值`);
+  }
+});
