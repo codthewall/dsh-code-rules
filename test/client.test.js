@@ -125,4 +125,29 @@ describe('设置页整页', () => {
     assert.ok(module.__internals.CSS.includes('.dcr-page'));
     assert.ok(module.__internals.CSS.includes('.dcr-card'));
   });
+
+  it('整页能渲染出标题与三张卡片', async () => {
+    const { module } = await loadClient();
+    const scope = {
+      getSnapshot: () => ({
+        value: { defaultEnabled: true, fullLimit: 6000, summaryLimit: 12000 },
+        writable: true,
+      }),
+      subscribe: () => () => {},
+      set: async () => true,
+    };
+    const tree = module.__internals.CodeRulesSection({ scope });
+
+    const nodes = [];
+    const walk = (node) => {
+      if (node === null || typeof node !== 'object') return;
+      nodes.push(node);
+      for (const child of node.children ?? []) walk(child);
+    };
+    walk(tree);
+
+    assert.ok(nodes.some((node) => node.props?.className === 'dcr-page'));
+    assert.equal(nodes.filter((node) => node.props?.className === 'dcr-card').length, 3);
+    assert.ok(nodes.some((node) => node.children?.includes('代码约束规则')));
+  });
 });
