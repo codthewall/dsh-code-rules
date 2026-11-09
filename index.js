@@ -28,10 +28,17 @@ const PARSE_CACHE_SIZE = 8;
 
 /**
  * 宿主靠这个 schema 为本插件开一个设置命名空间（id 取自 `cordis.patch.yml` 里的 `id`，
- * 即 `code-rules`），设置页的卡片才能读写 `defaultEnabled`。
+ * 即 `code-rules`），设置页才能读写这三个字段。
+ *
+ * **字段必须 `.volatile()`**：宿主 `settings.describe()` 用 `volatileForm()` 过滤，
+ * 只保留「最近的可变祖先标了 volatile」的字段；整份 schema 里一个 volatile 字段都没有时
+ * 它返回 undefined，该 entry 直接被 `describe()` 丢掉，客户端的 `whileServed` 永远不 fire
+ * ——表现就是设置页里根本没有这一项。
+ *
+ * 带 volatile 的字段在运行时是响应式引用，读值要走 `.get()`（见 `configValue`）。
  *
  * schemastery 只装在运行时的 profile 里，仓库测试环境没有它——导入失败就当作「没有
- * schema」：插件照常工作，只是不出现设置卡片。顶层 await 是 ESM 的合法写法，
+ * schema」：插件照常工作，只是不出现设置页。顶层 await 是 ESM 的合法写法，
  * 加载器用 `import()` 取模块时会等它结算。
  */
 let schema = null;
@@ -70,16 +77,35 @@ export const Config =
         defaultEnabled: schema
           .boolean()
           .default(true)
-          .description('新会话默认注入 CODE-RULES.md；会话内可用 /rules off 临时关闭'),
+          .description('新会话默认注入 CODE-RULES.md；会话内可用 /rules off 临时关闭')
+          .volatile(),
         fullLimit: schema
           .number()
           .default(6000)
-          .description('全文注入的上限（字符）；超过就降级成摘要'),
+          .description('全文注入的上限（字符）；超过就降级成摘要')
+          .volatile(),
         summaryLimit: schema
           .number()
           .default(12000)
-          .description('摘要注入的上限（字符）；超过只注入摘要加完整冻结清单'),
+          .description('摘要注入的上限（字符）；超过只注入摘要加完整冻结清单')
+          .volatile(),
       });
+
+/**
+ * 读一个配置字段：带 `.volatile()` 的字段在宿主里是响应式引用（有 `.get()`），
+ * 测试里直接传普通值——两种都接住，取不到就回落。
+ */
+function configValue(value, fallback) {
+  if (value !== null && typeof value === 'object' && typeof value.get === 'function') {
+    try {
+      const current = value.get();
+      return current === undefined || current === null ? fallback : current;
+    } catch {
+      return fallback;
+    }
+  }
+  return value === undefined || value === null ? fallback : value;
+}
 
 /** 正文没变就不必重新解析：每轮注入都读同一个文件。 */
 const docCache = new Map();
@@ -130,8 +156,8 @@ function injectionFor(state, context) {
   try {
     return buildInjection(parseCached(text), {
       enabled: true,
-      fullLimit: state.config.fullLimit,
-      summaryLimit: state.config.summaryLimit,
+      fullLimit: configValue(state.config.fullLimit, undefined),
+      summaryLimit: configValue(state.config.summaryLimit, undefined),
     });
   } catch {
     return '';
@@ -171,7 +197,7 @@ function enabledFor(state, session, cwd) {
   if (session && state.sessions.has(session)) return state.sessions.get(session);
   const project = projectEnabled(cwd);
   if (project !== undefined) return project;
-  return state.config.defaultEnabled !== false;
+  return configValue(state.config.defaultEnabled, true) !== false;
 }
 
 function projectEnabled(cwd) {

@@ -204,6 +204,42 @@ test('插件配置 defaultEnabled=false 时默认不注入', async () => {
   });
 });
 
+test('volatile 引用形态的配置也能读（宿主里带 .volatile() 的字段是 ref）', async () => {
+  await withTempDir(async (dir) => {
+    const { ctx, registered } = makeCtx(dir);
+    apply(ctx, {
+      defaultEnabled: { get: () => true },
+      fullLimit: { get: () => 1000 },
+      summaryLimit: { get: () => 1000 },
+    });
+    await runner(registered)('init');
+    const run = runner(registered);
+    // 阈值下限被夹在 1000 字符，先把文件撑过这个长度，才能看到降级。
+    await run(`add 禁止在循环里直接拼 SQL，参数必须走占位符，理由与相关工单写在注释里 ${'x'.repeat(80)}`);
+    await run(`add 所有对外接口在返回前都要做一次空值校验，并在失败分支记录一条带上下文的日志 ${'x'.repeat(80)}`);
+    const text = registered.sections[0].text({ agent: { session: 's1' } });
+    // 两个阈值都被压到下限，整份文件放不下，只能走最小档。
+    assert.match(text, /只注入最小档/);
+  });
+});
+
+test('引用取不到的配置字段回落到默认值', async () => {
+  await withTempDir(async (dir) => {
+    const { ctx, registered } = makeCtx(dir);
+    apply(ctx, {
+      defaultEnabled: {
+        get: () => {
+          throw new Error('boom');
+        },
+      },
+      fullLimit: { get: () => undefined },
+      summaryLimit: { get: () => null },
+    });
+    await runner(registered)('init');
+    assert.match(registered.sections[0].text({ agent: { session: 's1' } }), /# 代码约束规则/);
+  });
+});
+
 test('init --ai 在拿不到 agent.steer 时降级为提示，仍然成功', async () => {
   await withTempDir(async (dir) => {
     const { ctx, registered } = makeCtx(dir);
