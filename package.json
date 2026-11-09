@@ -1,0 +1,53 @@
+{
+  "name": "dsh-code-rules",
+  "version": "0.1.0",
+  "description": "代码约束规则：用 /rules 维护 CODE-RULES.md，并在每轮对话里注入给模型",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "lib",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "engines": {
+      "dsh": ">=0.2.1-rc.2 <0.4.0-0"
+    },
+    "compatibility": {
+      "dshReleases": {
+        "0.2.1-rc.2": "compatible",
+        "0.2.1-rc.5": "compatible",
+        "0.2.2-rc.1": "compatible"
+      }
+    }
+  },
+  "engines": {
+    "node": ">=22.19"
+  },
+  "scripts": {
+    "test": "node --test --test-timeout=60000 test/*.test.js"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    }
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "code-rules"
+  ],
+  "license": "MIT"
+}
