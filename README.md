@@ -89,7 +89,9 @@ $env:ELECTRON_RUN_AS_NODE='1'
 
 1. **会话**：`/rules off`、`/rules on`，只影响当前会话，不落盘。
 2. **项目**：`.rules/settings.json` 里 `{ "enabled": false }`。
-3. **全局**：`cordis.patch.yml` 里本插件的 `config.defaultEnabled`，默认 `true`。
+3. **全局**：插件配置 `defaultEnabled`，默认 `true`。改它有两条路：设置页「插件」里的「代码约束规则」卡片，或直接写 profile 的 `cordis.patch.yml`。
+
+设置页的卡片走客户端一半（`lib/client.js`）：只有宿主为该插件提供了配置命名空间（由 `index.js` 导出的 `Config` schema 决定）时它才出现，否则静默不渲染。开关只写 `defaultEnabled`，会话级的临时开关仍在命令里。
 
 ## 历史与回退
 
@@ -134,7 +136,8 @@ npm test        # node --test，无第三方依赖
 | `lib/args.js` | `rawInput` 解析 |
 | `lib/tool.js` | `rules_update` 的定义与注册（加载器可注入，方便测试） |
 | `lib/tool-call.js` | 工具调用 → 写入路径 |
-| `index.js` | 挂到 DSH：命令、注入段、工具、三层开关 |
+| `lib/client.js` | 设置页卡片（浏览器一半，`exports["./client"]`） |
+| `index.js` | 挂到 DSH：命令、注入段、工具、三层开关、`Config` schema |
 
 ## 不做的事
 

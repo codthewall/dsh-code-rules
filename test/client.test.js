@@ -1,0 +1,118 @@
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { describe, it } from 'node:test';
+import { fileURLToPath } from 'node:url';
+import vm from 'node:vm';
+
+const here = dirname(fileURLToPath(import.meta.url));
+const clientPath = join(here, '..', 'lib', 'client.js');
+
+/**
+ * 客户端插件是 `window.__ModuleLoader__.load({...})` 包起来的脚本，不能在 Node 里直接
+ * import。这里用 vm 造一个最小浏览器环境，把 factory 跑出来。
+ */
+async function loadClient({ scope } = {}) {
+  const source = await readFile(clientPath, 'utf8');
+  let captured;
+  const window = {
+    __ModuleLoader__: {
+      load(spec) {
+        captured = spec;
+      },
+    },
+  };
+  vm.runInNewContext(source, { window, console });
+
+  const React = {
+    createElement: (type, props, ...children) => ({ type, props, children }),
+    useState: (initial) => [typeof initial === 'function' ? initial() : initial, () => {}],
+    useEffect: () => undefined,
+  };
+  const primitives = { Switch: function Switch() {} };
+
+  const module = captured.factory((name) => {
+    if (name === 'react') return React;
+    if (name === '@deepseek-ai/dsh-client-ui-primitives') return primitives;
+    throw new Error(`unexpected require: ${name}`);
+  });
+
+  return { spec: captured, module, React };
+}
+
+function makeCtx(served = ['code-rules']) {
+  const registered = [];
+  const injected = [];
+  return {
+    registered,
+    injected,
+    ctx: {
+      effect(fn) {
+        return fn();
+      },
+      configForms: {
+        whileServed(namespaces, callback) {
+          return callback(new Set(namespaces.filter((ns) => served.includes(ns))));
+        },
+        get(ns) {
+          return { ns };
+        },
+      },
+      slots: {
+        inject(name, factory) {
+          injected.push(name);
+          return factory();
+        },
+        register(definition, component) {
+          registered.push({ definition, component });
+          return () => {};
+        },
+      },
+    },
+  };
+}
+
+describe('客户端设置卡片', () => {
+  it('模块声明了入口 id 与最小服务集', async () => {
+    const { spec, module } = await loadClient();
+    assert.equal(spec.id, 'dsh-code-rules');
+    // vm 里跑出来的数组跨 realm，deepStrictEqual 会因原型不同而失败，转成本地数组再比。
+    assert.deepEqual([...module.inject], ['slots', 'configForms']);
+    assert.equal(typeof module.apply, 'function');
+    assert.equal(module.__internals.ENTRY_ID, 'code-rules');
+    assert.equal(module.__internals.CONFIG_NS, 'code-rules');
+  });
+
+  it('宿主提供命名空间时，往 plugins.item 挂一张卡片', async () => {
+    const { module } = await loadClient();
+    const { ctx, registered, injected } = makeCtx();
+    module.apply(ctx);
+
+    assert.deepEqual(injected, ['plugins.item']);
+    assert.equal(registered.length, 1);
+    const { definition } = registered[0];
+    assert.equal(definition.name, 'plugins.item');
+    assert.equal(definition.id, 'code-rules');
+    assert.equal(definition.label(), '代码约束规则');
+    assert.equal(definition.inject().scope.ns, 'code-rules');
+  });
+
+  it('宿主没提供命名空间时不挂卡片，也不抛错', async () => {
+    const { module } = await loadClient();
+    const { ctx, registered } = makeCtx([]);
+    module.apply(ctx);
+    assert.equal(registered.length, 0);
+  });
+
+  it('卡片给插件列表提供一句摘要', async () => {
+    const { module } = await loadClient();
+    const summary = module.__internals.CodeRulesCard({ view: 'summary' });
+    assert.equal(summary, module.__internals.COPY.summary);
+  });
+
+  it('拿不到表单快照时渲染一句「暂时不可用」', async () => {
+    const { module } = await loadClient();
+    const element = module.__internals.CodeRulesCard({ scope: undefined });
+    assert.equal(element.children[0], module.__internals.COPY.unavailable);
+  });
+});

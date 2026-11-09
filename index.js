@@ -26,6 +26,53 @@ const SETTINGS_FILE = '.rules/settings.json';
 const SECTION_ORDER = 500;
 const PARSE_CACHE_SIZE = 8;
 
+/**
+ * 宿主靠这个 schema 为本插件开一个设置命名空间（id 取自 `cordis.patch.yml` 里的 `id`，
+ * 即 `code-rules`），设置页的卡片才能读写 `defaultEnabled`。
+ *
+ * schemastery 只装在运行时的 profile 里，仓库测试环境没有它——导入失败就当作「没有
+ * schema」：插件照常工作，只是不出现设置卡片。顶层 await 是 ESM 的合法写法，
+ * 加载器用 `import()` 取模块时会等它结算。
+ */
+let schema = null;
+try {
+  schema = (await import('@deepseek-ai/schemastery')).default;
+} catch {
+  schema = null;
+}
+
+/**
+ * 兜底：宿主在加载插件时会把裸包名解析到 profile 的 node_modules，但直接 `node` 跑
+ * 本仓库时拿不到那套解析。profile 一定装着 schemastery，所以按 DSH_HOME/DSH_PROFILE
+ * 再试一次——拿不到就算了。
+ */
+if (schema === null) {
+  try {
+    const { createRequire } = await import('node:module');
+    const { join: joinPath } = await import('node:path');
+    const home = process.env.DSH_HOME;
+    const profile = process.env.DSH_PROFILE;
+    if (home && profile) {
+      const anchor = joinPath(home, 'profiles', String(profile), 'noop.cjs');
+      const loaded = createRequire(anchor)('@deepseek-ai/schemastery');
+      schema = loaded?.default ?? loaded;
+    }
+  } catch {
+    schema = null;
+  }
+}
+
+/** 插件配置：只暴露一个总开关，其余开关在会话/项目层。 */
+export const Config =
+  schema === null
+    ? undefined
+    : schema.object({
+        defaultEnabled: schema
+          .boolean()
+          .default(true)
+          .description('新会话默认注入 CODE-RULES.md；会话内可用 /rules off 临时关闭'),
+      });
+
 /** 正文没变就不必重新解析：每轮注入都读同一个文件。 */
 const docCache = new Map();
 
