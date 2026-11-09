@@ -48,7 +48,7 @@ dsh plugin --profile web add link:<本仓库绝对路径>
 
 | 命令 | 作用 |
 | --- | --- |
-| `/rules init [--force]` | 探测仓库（语言栈、目录、测试命令、命名风格）并生成 `CODE-RULES.md` |
+| `/rules init [--force] [--ai]` | 探测仓库（语言栈、目录、测试命令、命名风格）并生成 `CODE-RULES.md`；`--ai` 再让 Agent 读几个真实文件精修 |
 | `/rules status` | 版本、规则数、等级分布、冻结项、本会话注入开关 |
 | `/rules add <文本> [--section=2-8] [--level=MUST\|SHOULD\|MAY]` | 新增一条规则，省略 `--section` 时按关键词推断 |
 | `/rules update <R-001> [新文本] [--level=…]` | 改规则；放宽等级要 `--confirm` |

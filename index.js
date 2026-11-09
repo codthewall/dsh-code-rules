@@ -146,14 +146,20 @@ async function handle(state, agent, rawInput) {
         const facts = await probeRepo(cwd);
         const doc = buildInitialDoc(facts, { today: today() });
         await writeInitial(cwd, doc, { force: flags.force === true });
-        return ok(
-          [
-            `已生成 ${RULES_FILE}（v${doc.version ?? 1}）`,
-            describeFacts(facts),
-            '',
-            '建议把该文件与 .rules/ 一起提交；下一轮起规则自动注入。',
-          ].join('\n'),
-        );
+        const lines = [
+          `已生成 ${RULES_FILE}（v${doc.version ?? 1}）`,
+          describeFacts(facts),
+        ];
+        if (flags.ai === true) {
+          const steered = await steerRefine(agent, facts);
+          lines.push(
+            steered
+              ? '已把精修任务交给当前 Agent：它会读几个代表性文件，用 rules_update 把通版骨架改成本仓库真正在用的约定。'
+              : '（当前环境无法自动精修：--ai 需要宿主提供 agent.steer，骨架已生成，可手动补充。）',
+          );
+        }
+        lines.push('', '建议把该文件与 .rules/ 一起提交；下一轮起规则自动注入。');
+        return ok(lines.join('\n'));
       }
       case 'add': {
         const current = await requireDoc(cwd);
@@ -235,7 +241,7 @@ async function requireDoc(cwd) {
 }
 
 const HELP = [
-  '/rules init [--force]              探测仓库并生成 CODE-RULES.md',
+  '/rules init [--force] [--ai]       探测仓库并生成 CODE-RULES.md（--ai 让 Agent 精修）',
   '/rules status                      查看规则数量、冻结项、注入状态',
   '/rules add <文本> [--section=2-8] [--level=MUST|SHOULD|MAY]',
   '/rules update <R-001> [新文本] [--level=…] [--remove --confirm]',
@@ -244,6 +250,36 @@ const HELP = [
   '/rules rollback [1|2]              退回上一代 / 上上代',
   '/rules off | /rules on             只关本会话的注入',
 ].join('\n');
+
+/**
+ * `init --ai`：把「精修这份骨架」交给当前 Agent。
+ * 宿主没提供 steer / dsh-llm 时返回 false，命令照常成功。
+ */
+async function steerRefine(agent, facts) {
+  if (typeof agent?.steer !== 'function') return false;
+  try {
+    const { createUserMessage } = await import('@deepseek-ai/dsh-llm');
+    agent.steer(
+      createUserMessage({
+        content: [
+          {
+            type: 'text',
+            text: [
+              `刚生成了 ${RULES_FILE}（${describeFacts(facts)}）。`,
+              '请读一遍仓库里 5–10 个代表性文件，把这份通用骨架改成本仓库真正在用的约定：',
+              '删掉确实不会执行的条款，补上你观察到的、模板里没写的规则。',
+              '用 rules_update 逐条改（op=add / update / remove，note 写清理由），不要编造没看到的约定。',
+            ].join(''),
+          },
+        ],
+        source: { kind: 'user' },
+      }),
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /* --------------------------------- 工具 ---------------------------------- */
 

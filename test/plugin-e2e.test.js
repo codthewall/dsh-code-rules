@@ -204,6 +204,17 @@ test('插件配置 defaultEnabled=false 时默认不注入', async () => {
   });
 });
 
+test('init --ai 在拿不到 agent.steer 时降级为提示，仍然成功', async () => {
+  await withTempDir(async (dir) => {
+    const { ctx, registered } = makeCtx(dir);
+    apply(ctx);
+    const result = await runner(registered)('init --ai');
+    assert.equal(result.kind, 'success', result.text);
+    assert.match(result.text, /无法自动精修/);
+    assert.match(await readFile(join(dir, 'CODE-RULES.md'), 'utf8'), /R-001/);
+  });
+});
+
 test('没有工作目录时不崩，只是不注入', async () => {
   const { ctx, registered } = makeCtx(null);
   apply(ctx);
