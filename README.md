@@ -91,7 +91,13 @@ $env:ELECTRON_RUN_AS_NODE='1'
 2. **项目**：`.rules/settings.json` 里 `{ "enabled": false }`。
 3. **全局**：插件配置 `defaultEnabled`（默认 `true`），外加两个注入预算 `fullLimit`（默认 6000）、`summaryLimit`（默认 12000）。改它们有两条路：设置页左侧导航里的「代码约束规则」整页，或直接写 profile 的 `cordis.patch.yml`。
 
-设置页整页走客户端一半（`lib/client.js`，`settings.section` 槽位）：只有宿主为该插件提供了配置命名空间（由 `index.js` 导出的 `Config` schema 决定）时它才挂载，否则静默不渲染。三个字段都能在页面上改并保存；会话级的临时开关仍在命令里（`/rules off|on`），不落盘。
+设置页整页走客户端一半（`lib/client.js`，`settings.section` 槽位）。导航项无条件注册，页面上再取配置；宿主没有为它提供配置命名空间时，页面照样打开，只是字段区显示「这个 profile 暂时没有提供配置项」。三个字段都能在页面上改并保存；会话级的临时开关仍在命令里（`/rules off|on`），不落盘。
+
+## 兼容性
+
+- DSH：`>=0.2.1-rc.2 <0.4.0-0`（`dsh.engines.dsh`），并在 `dsh.compatibility.dshReleases` 里显式登记 `0.2.1-rc.2`、`0.2.1-rc.5`、`0.2.2-rc.1` 为 compatible。
+- 装在区间外的运行时上，宿主启动时会打印 `Plugin dsh-code-rules@0.1.0 is incompatible with dsh <版本>: requirements {"dsh": "^..."}` 并跳过这个插件——和插件管理器对其它包的拒绝是同一套机制，不会静默半挂。
+- Node：`>=22.19`（测试用内置 `node:test`，插件本身没有第三方依赖）。
 
 ## 历史与回退
 
@@ -114,6 +120,38 @@ $env:ELECTRON_RUN_AS_NODE='1'
 - 规则行固定格式：`- R-012 · MUST · 正文`（中点 U+00B7；编号全局递增）。
 - 冻结清单是 `yaml` 代码块，顶层键 `frozen`，每项含 `name` / `kind` / `since` / `reason`。
 - 解析错误会带错误码，例如 `E_SECTION_MISSING`、`E_RULE_SYNTAX`、`E_SCHEMA_UNSUPPORTED`。
+
+## 验收
+
+2026-11-09 在 Desktop profile（dsh 0.2.1-rc.5，Windows）上做过一次完整验证，分三层：
+
+**一、应用内实测**（用户在宿主里操作，AI 观察结果）
+
+| 步骤 | 操作 | 实际结果 |
+| --- | --- | --- |
+| 1 | `dsh plugin --profile desktop add link:<仓库>`（走宿主 CLI） | `+ dsh-code-rules 0.1.0`；`loadProfileDirectory` 17 层、`skipped: []` |
+| 2 | 完全退出并重开 DSH | 插件被加载，`/rules` 可用 |
+| 3 | 在仓库里敲 `/rules init` | 生成 `CODE-RULES.md`，九个章节齐全 |
+| 4 | 重开设置页 | 左侧导航出现「代码约束规则」，三个字段可改可存 |
+
+**二、脚本直连插件入口**（真实文件系统；`workingDirectory` / `systemPrompt` / `commands` 用桩，用来在没有 UI 的情况下逐条看输出）
+
+| # | 命令 | 观察到 |
+| --- | --- | --- |
+| 1 | `/rules status`（无文件） | `未找到 CODE-RULES.md（在 <tmp>）。运行 /rules init 生成。` |
+| 2 | `/rules init` | 生成 v1：`语言：javascript`、`顶层目录：src`、`测试命令：npm test`、987 字节；无「未识别语言」「未探测到」字样；R-015 为 `提交前运行 npm test，并确保全部通过。` |
+| 3 | `/rules add "所有导出的函数都要有 JSDoc 注释"` | `v2 · 新增 R-017 · MUST · 所有导出的函数都要有 JSDoc 注释（第 5 节 注释与文档）`（章节按关键词推断，引号被剥掉） |
+| 4 | `/rules freeze add --reason=对外接口已经稳定` | `v3 · 冻结 add` |
+| 5 | `/rules status` | `v3`、`规则：17 条（MUST 12 / SHOULD 4 / MAY 1）`、`冻结项：1`、`最近变更：… v3 · 冻结 add` |
+| 6 | `/rules rollback 1` | `已回退到上一代，当前 v4（回退前的 3 已存入历史）`；正文回到 v2 的内容，冻结项归零 |
+| 7 | `/rules status` | `v4`、`最近变更：… v4 · 回退到上一代（原 v2）` |
+| 8 | 新会话（另一个 session id）读注入段 | 长度 1218 字节，含冻结清单与 `rules_update` 维护指令 |
+| 9 | `/rules off` / `/rules on` | 注入长度 `1218 → 0 → 1218` |
+| 10 | 检查 `.rules/history/` | `v-1.md`、`v-2.md` 都在 |
+
+**三、自动化**
+
+`npm test` → 75 passed / 0 failed（`node:test`，覆盖解析、注入三档、写入路径、快照失败回滚、命令端到端、`rules_update` 工具、设置页渲染）。
 
 ## 开发
 

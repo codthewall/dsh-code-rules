@@ -1,6 +1,6 @@
 {
   "name": "dsh-code-rules",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "代码约束规则：用 /rules 维护 CODE-RULES.md，并在每轮对话里注入给模型",
   "type": "module",
   "main": "index.js",
@@ -13,9 +13,19 @@
     "index.js",
     "lib",
     "cordis.patch.yml",
-    "docs",
-    "README.md"
+    "README.md",
+    "LICENSE",
+    "docs/adr",
+    "docs/smoke.md"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/codthewall/dsh-code-rules.git"
+  },
+  "homepage": "https://github.com/codthewall/dsh-code-rules#readme",
+  "bugs": {
+    "url": "https://github.com/codthewall/dsh-code-rules/issues"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
