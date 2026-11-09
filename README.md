@@ -38,11 +38,22 @@ frozen:
 
 ## 安装
 
+先确认你用的是哪个 profile：Desktop 应用只读 `profiles/desktop`，`dsh web` 读 `profiles/web`，装错目录会表现为「插件列表里根本没有它」。
+
 ```bash
+# web
 dsh plugin --profile web add link:<本仓库绝对路径>
+
+# desktop：必须走宿主自带 CLI，裸 dsh 会拒绝（该 profile 由 Electron 应用独占管理）
+$env:ELECTRON_RUN_AS_NODE='1'
+& "<DSH 安装目录>\DeepSeek Harness.exe" --expose-internals `
+  "<DSH 安装目录>\resources\app.asar\dsh\node_modules\@deepseek-ai\dsh-desktop-host\lib\cli.js" `
+  plugin --profile desktop add "link:<本仓库绝对路径>"
 ```
 
-装完**重启 DSH**（插件树只在启动时组装）。之后在任意项目里敲 `/rules init`。
+装完**完全退出 DSH 再启动**（插件树只在启动时组装，关窗口不算）。之后在任意项目里敲 `/rules init`。
+
+发版前的手动验证步骤见 [`docs/smoke.md`](docs/smoke.md)。
 
 ## 命令
 
@@ -119,6 +130,10 @@ npm test        # node --test，无第三方依赖
 | `lib/mutations.js` | add / update / freeze / unfreeze |
 | `lib/probe.js` | 首次生成的仓库探测 |
 | `lib/template.js` | 九节骨架 |
+| `lib/status.js` | `/rules status` 的文本 |
+| `lib/args.js` | `rawInput` 解析 |
+| `lib/tool.js` | `rules_update` 的定义与注册（加载器可注入，方便测试） |
+| `lib/tool-call.js` | 工具调用 → 写入路径 |
 | `index.js` | 挂到 DSH：命令、注入段、工具、三层开关 |
 
 ## 不做的事

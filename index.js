@@ -18,11 +18,12 @@ import { parse, RULES_FILE, RulesDocError } from './lib/rules-doc.js';
 import { readSnapshot } from './lib/snapshots.js';
 import { statusText } from './lib/status.js';
 import { buildInitialDoc, describeFacts } from './lib/template.js';
+import { runToolCall } from './lib/tool-call.js';
+import { registerTool as registerRulesTool } from './lib/tool.js';
 import { commitDoc, readCurrentDoc, today, writeInitial } from './lib/write.js';
 
 const SETTINGS_FILE = '.rules/settings.json';
 const SECTION_ORDER = 500;
-const TOOL_NAME = 'rules_update';
 const PARSE_CACHE_SIZE = 8;
 
 /** 正文没变就不必重新解析：每轮注入都读同一个文件。 */
@@ -50,7 +51,12 @@ export function apply(ctx, config = {}) {
       handler: ({ agent, rawInput }) => handle(state, agent, rawInput),
     });
   });
-  registerTool(ctx, state);
+  void registerRulesTool({
+    ctx,
+    loadTools: () => import('@deepseek-ai/dsh-tools'),
+    handle: (args, exec) => executeToolCall(state, args, exec),
+    onError: (message) => warn(ctx, message),
+  });
 }
 
 /* ---------------------------------- 注入 ---------------------------------- */
@@ -283,104 +289,12 @@ async function steerRefine(agent, facts) {
 
 /* --------------------------------- 工具 ---------------------------------- */
 
-function registerTool(ctx, state) {
-  void (async () => {
-    let defineTool;
-    try {
-      ({ defineTool } = await import('@deepseek-ai/dsh-tools'));
-    } catch {
-      warn(ctx, '未找到 @deepseek-ai/dsh-tools，跳过 rules_update 工具注册');
-      return;
-    }
-    try {
-      ctx.inject(['tools'], (scope) => {
-        scope.tools.register(
-          defineTool({
-            name: TOOL_NAME,
-            description:
-              '维护项目代码约束规则文件 CODE-RULES.md：新增/修改/删除规则、冻结或解冻标识符。改完代码后如果出现了新的约定或违反了现有约定，用它更新规则并写清理由。',
-            parameters: {
-              op: { type: 'string', required: true, description: 'add | update | remove | freeze | unfreeze' },
-              note: { type: 'string', required: true, description: '为什么改：一句话变更理由' },
-              target: { type: 'string', description: 'update/remove 的规则 id（R-001）或 unfreeze 的标识符名' },
-              text: { type: 'string', description: 'add/update 的规则正文' },
-              level: { type: 'string', description: 'MUST | SHOULD | MAY，默认 MUST' },
-              section: { type: 'string', description: '第几节（2-8），省略时按关键词推断' },
-              reason: { type: 'string', description: 'freeze/unfreeze 的理由' },
-            },
-            output: {
-              schema: { type: 'string' },
-              render: (_args, value) => [{ type: 'text', text: value }],
-            },
-            async execute(args, exec) {
-              const cwd = await cwdAsync(state, exec?.agent);
-              const note = String(args?.note ?? '').trim() || '模型维护';
-              try {
-                switch (args?.op) {
-                  case 'add': {
-                    const current = await requireDoc(cwd);
-                    const payload = addRule(current.doc, {
-                      text: args.text,
-                      section: args.section === undefined ? undefined : Number(args.section),
-                      level: String(args.level ?? 'MUST').toUpperCase(),
-                    });
-                    const { version } = await commitDoc(cwd, payload.doc, `${payload.changed}｜${note}`);
-                    return `已写入 v${version} · ${payload.changed}`;
-                  }
-                  case 'update': {
-                    const current = await requireDoc(cwd);
-                    const payload = updateRule(current.doc, {
-                      id: String(args.target ?? '').toUpperCase(),
-                      text: args.text,
-                      level: args.level === undefined ? undefined : String(args.level).toUpperCase(),
-                      confirm: true,
-                    });
-                    const { version } = await commitDoc(cwd, payload.doc, `${payload.changed}｜${note}`);
-                    return `已写入 v${version} · ${payload.changed}`;
-                  }
-                  case 'remove': {
-                    const current = await requireDoc(cwd);
-                    const payload = updateRule(current.doc, {
-                      id: String(args.target ?? '').toUpperCase(),
-                      remove: true,
-                      confirm: true,
-                    });
-                    const { version } = await commitDoc(cwd, payload.doc, `${payload.changed}｜${note}`);
-                    return `已写入 v${version} · ${payload.changed}`;
-                  }
-                  case 'freeze': {
-                    const current = await requireDoc(cwd);
-                    const payload = freezeEntry(current.doc, {
-                      name: args.target,
-                      kind: args.kind,
-                      reason: args.reason ?? note,
-                    });
-                    const { version } = await commitDoc(cwd, payload.doc, `${payload.changed}｜${note}`);
-                    return `已写入 v${version} · ${payload.changed}`;
-                  }
-                  case 'unfreeze': {
-                    const current = await requireDoc(cwd);
-                    const payload = unfreezeEntry(current.doc, {
-                      name: args.target,
-                      reason: args.reason ?? note,
-                    });
-                    const { version } = await commitDoc(cwd, payload.doc, `${payload.changed}｜${note}`);
-                    return `已写入 v${version} · ${payload.changed}`;
-                  }
-                  default:
-                    return `未知操作：${args?.op}（可用 add/update/remove/freeze/unfreeze）`;
-                }
-              } catch (error) {
-                return describeFailure(error);
-              }
-            },
-          }),
-        );
-      });
-    } catch (error) {
-      warn(ctx, `rules_update 工具注册失败：${error?.message ?? error}`);
-    }
-  })();
+/** `rules_update` 的执行体：解析工作目录后交给共用写路径。 */
+export async function executeToolCall(state, args, exec) {
+  const cwd = await cwdAsync(state, exec?.agent);
+  if (!cwd) return '无法确定当前会话的工作目录';
+  const note = String(args?.note ?? '').trim() || '模型维护';
+  return runToolCall(cwd, args, { note });
 }
 
 /* --------------------------------- 小工具 --------------------------------- */
