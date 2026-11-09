@@ -12,7 +12,7 @@ const clientPath = join(here, '..', 'lib', 'client.js');
  * 客户端插件是 `window.__ModuleLoader__.load({...})` 包起来的脚本，不能在 Node 里直接
  * import。这里用 vm 造一个最小浏览器环境，把 factory 跑出来。
  */
-async function loadClient() {
+async function loadClient({ primitivesAvailable = true } = {}) {
   const source = await readFile(clientPath, 'utf8');
   let captured;
   const window = {
@@ -33,7 +33,10 @@ async function loadClient() {
 
   const module = captured.factory((name) => {
     if (name === 'react') return React;
-    if (name === '@deepseek-ai/dsh-client-ui-primitives') return primitives;
+    if (name === '@deepseek-ai/dsh-client-ui-primitives') {
+      if (!primitivesAvailable) throw new Error('module not available');
+      return primitives;
+    }
     throw new Error(`unexpected require: ${name}`);
   });
 
@@ -149,5 +152,30 @@ describe('设置页整页', () => {
     assert.ok(nodes.some((node) => node.props?.className === 'dcr-page'));
     assert.equal(nodes.filter((node) => node.props?.className === 'dcr-card').length, 3);
     assert.ok(nodes.some((node) => node.children?.includes('代码约束规则')));
+  });
+
+  it('控件库里没有 Switch 时退回原生 checkbox，页面照常渲染', async () => {
+    const { module } = await loadClient({ primitivesAvailable: false });
+    const scope = {
+      getSnapshot: () => ({ value: {}, writable: true }),
+      subscribe: () => () => {},
+      set: async () => true,
+    };
+    const tree = module.__internals.CodeRulesSection({ scope });
+
+    const nodes = [];
+    const walk = (node) => {
+      if (node === null || typeof node !== 'object') return;
+      nodes.push(node);
+      for (const child of node.children ?? []) walk(child);
+    };
+    walk(tree);
+
+    // 组件是惰性的：桩里的 createElement 不会执行函数组件，自己调一次看它渲染什么。
+    const switchNode = nodes.find((node) => typeof node.type === 'function');
+    const rendered = switchNode.type(switchNode.props);
+    assert.equal(rendered.type, 'input');
+    assert.equal(rendered.props.type, 'checkbox');
+    assert.equal(nodes.filter((node) => node.props?.className === 'dcr-card').length, 3);
   });
 });
