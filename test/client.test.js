@@ -63,8 +63,8 @@ function makeCtx(served = ['code-rules'], snapshotValue = {}) {
         whileServed(namespaces, callback) {
           return callback(new Set(namespaces.filter((ns) => served.includes(ns))));
         },
-        get() {
-          return scope;
+        get(ns) {
+          return served.includes(ns) ? scope : null;
         },
       },
       slots: {
@@ -86,7 +86,7 @@ describe('设置页整页', () => {
     const { spec, module } = await loadClient();
     assert.equal(spec.id, 'dsh-code-rules');
     // vm 里跑出来的数组跨 realm，deepStrictEqual 会因原型不同而失败，转成本地数组再比。
-    assert.deepEqual([...module.inject], ['slots', 'configForms']);
+    assert.deepEqual([...module.inject], ['slots']);
     assert.equal(typeof module.apply, 'function');
     assert.equal(module.__internals.ENTRY_ID, 'code-rules');
     assert.equal(module.__internals.CONFIG_NS, 'code-rules');
@@ -106,11 +106,21 @@ describe('设置页整页', () => {
     assert.equal(typeof definition.inject().scope.set, 'function');
   });
 
-  it('宿主没提供命名空间时不挂载，也不抛错', async () => {
+  it('宿主没 serve 命名空间时仍然挂导航项，只是没有可编辑的 scope', async () => {
     const { module } = await loadClient();
     const { ctx, registered } = makeCtx([]);
     module.apply(ctx);
-    assert.equal(registered.length, 0);
+    assert.equal(registered.length, 1);
+    assert.equal(registered[0].definition.inject().scope, null);
+  });
+
+  it('宿主没有 configForms 服务时也不抛错', async () => {
+    const { module } = await loadClient();
+    const { ctx, registered } = makeCtx();
+    delete ctx.configForms;
+    module.apply(ctx);
+    assert.equal(registered.length, 1);
+    assert.equal(registered[0].definition.inject().scope, null);
   });
 
   it('草稿从配置快照来，缺字段时回落到默认值', async () => {
