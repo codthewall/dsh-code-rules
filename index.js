@@ -10,17 +10,17 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { intFlag, parseArgs } from './lib/args.js';
+import { parseArgs } from './lib/args.js';
 import { buildInjection } from './lib/inject.js';
-import { addRule, freezeEntry, unfreezeEntry, updateRule } from './lib/mutations.js';
 import { probeRepo } from './lib/probe.js';
 import { parse, RULES_FILE, RulesDocError } from './lib/rules-doc.js';
-import { readSnapshot } from './lib/snapshots.js';
 import { statusText } from './lib/status.js';
 import { buildInitialDoc, describeFacts } from './lib/template.js';
+import { isWriteWord, runWriteWord } from './lib/dispatch-write.js';
 import { runToolCall } from './lib/tool-call.js';
+import { loadDshTools } from './lib/load-tools.js';
 import { registerTool as registerRulesTool } from './lib/tool.js';
-import { commitDoc, readCurrentDoc, today, writeInitial } from './lib/write.js';
+import { today, writeInitial } from './lib/write.js';
 
 const SETTINGS_FILE = '.rules/settings.json';
 const SECTION_ORDER = 500;
@@ -124,17 +124,32 @@ export function apply(ctx, config = {}) {
     });
   });
   ctx.inject(['commands'], (scope) => {
-    scope.commands.register({
+    const definition = (name) => ({
       definitionId: 'dsh-code-rules',
-      name: 'rules',
+      name,
       description: '查看与维护项目代码约束规则（CODE-RULES.md）',
       input: { hint: '[init|status|add|update|freeze|unfreeze|rollback|off|on|help] …' },
       handler: ({ agent, rawInput }) => handle(state, agent, rawInput),
     });
+    try {
+      scope.commands.register(definition('rules'));
+    } catch (error) {
+      const message = String(error?.message ?? error);
+      if (!message.startsWith('command "rules" is already registered')) {
+        warn(ctx, `/rules 注册失败：${message}`);
+        return;
+      }
+      warn(ctx, '/rules 已被其他插件占用，回退注册 /code-rules');
+      try {
+        scope.commands.register(definition('code-rules'));
+      } catch (fallbackError) {
+        warn(ctx, `/code-rules 注册失败：${fallbackError?.message ?? fallbackError}`);
+      }
+    }
   });
   void registerRulesTool({
     ctx,
-    loadTools: () => import('@deepseek-ai/dsh-tools'),
+    loadTools: () => loadDshTools(),
     handle: (args, exec) => executeToolCall(state, args, exec),
     onError: (message) => warn(ctx, message),
   });
@@ -252,83 +267,13 @@ async function handle(state, agent, rawInput) {
         lines.push('', '建议把该文件与 .rules/ 一起提交；下一轮起规则自动注入。');
         return ok(lines.join('\n'));
       }
-      case 'add': {
-        const current = await requireDoc(cwd);
-        const { doc, changed } = addRule(current.doc, {
-          text: positional.join(' '),
-          section: intFlag(flags.section),
-          level: levelFlag(flags),
-        });
-        const { version } = await commitDoc(cwd, doc, changed);
-        return ok(`v${version} · ${changed}`);
-      }
-      case 'update': {
-        const current = await requireDoc(cwd);
-        const [id, ...rest] = positional;
-        const { doc, changed } = updateRule(current.doc, {
-          id: id?.toUpperCase(),
-          text: rest.join(' '),
-          level: flags.level === undefined ? undefined : levelFlag(flags),
-          remove: flags.remove === true,
-          confirm: flags.confirm === true,
-        });
-        const { version } = await commitDoc(cwd, doc, changed);
-        return ok(`v${version} · ${changed}`);
-      }
-      case 'freeze': {
-        const current = await requireDoc(cwd);
-        const { doc, changed } = freezeEntry(current.doc, {
-          name: positional[0],
-          kind: flags.kind,
-          reason: flags.reason,
-          since: flags.since,
-        });
-        const { version } = await commitDoc(cwd, doc, changed);
-        return ok(`v${version} · ${changed}`);
-      }
-      case 'unfreeze': {
-        const current = await requireDoc(cwd);
-        const { doc, changed } = unfreezeEntry(current.doc, {
-          name: positional[0],
-          reason: flags.reason,
-        });
-        const { version } = await commitDoc(cwd, doc, changed);
-        return ok(`v${version} · ${changed}`);
-      }
-      case 'rollback': {
-        const generation = Number(positional[0] ?? 1);
-        if (generation !== 1 && generation !== 2) {
-          throw new RulesDocError('E_ROLLBACK_GENERATION', '只能回退到 1（上一代）或 2（上上代）');
-        }
-        const target = await requireDoc(cwd);
-        const text = await readSnapshot(cwd, generation);
-        if (text === null) {
-          throw new RulesDocError('E_NO_SNAPSHOT', `没有第 ${generation} 代快照，先做一次修改再来`);
-        }
-        const doc = parse(text);
-        const label = generation === 1 ? '上一代' : '上上代';
-        const { version } = await commitDoc(cwd, doc, `回退到${label}（原 v${doc.version}）`);
-        return ok(`已回退到${label}，当前 v${version}（回退前的 ${target.doc.version} 已存入历史）`);
-      }
       default:
+        if (isWriteWord(name)) return ok(await runWriteWord(name, { cwd, positional, flags }));
         return fail(new RulesDocError('E_UNKNOWN_WORD', `未知子命令：${name}\n\n${HELP}`));
     }
   } catch (error) {
     return fail(error);
   }
-}
-
-function levelFlag(flags) {
-  return String(flags.level ?? 'MUST').toUpperCase();
-}
-
-async function requireDoc(cwd) {
-  if (!cwd) throw new RulesDocError('E_NO_CWD', '无法确定当前会话的工作目录');
-  const current = await readCurrentDoc(cwd);
-  if (current === null) {
-    throw new RulesDocError('E_NO_RULES_FILE', `未找到 ${RULES_FILE}，先运行 /rules init`);
-  }
-  return current;
 }
 
 const HELP = [
@@ -399,6 +344,7 @@ function describeFailure(error) {
 }
 
 function warn(ctx, message) {
+  try { process.stderr.write('[dsh-code-rules] ' + message + String.fromCharCode(10)); } catch {}
   try {
     ctx.logger?.warn?.(`[dsh-code-rules] ${message}`);
   } catch {
